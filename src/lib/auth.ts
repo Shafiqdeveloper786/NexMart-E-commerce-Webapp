@@ -7,6 +7,37 @@ import { prisma } from "@/lib/prismadb";
 import bcrypt from "bcryptjs";
 import { validatePasswordStrength, detectSuspiciousActivity, checkSensitiveOpRateLimit } from "@/lib/utils/validation";
 
+// Custom PrismaAdapter that links OAuth accounts to existing users
+function CustomPrismaAdapter(prisma: any) {
+  const baseAdapter = PrismaAdapter(prisma);
+
+  return {
+    ...baseAdapter,
+    async createUser(userData: { email?: string | null }) {
+      // Check if user already exists
+      if (userData.email) {
+        const existingUser = await prisma.user.findUnique({
+          where: { email: userData.email },
+        });
+
+        if (existingUser) {
+          // Return existing user instead of creating new one
+          return {
+            id: existingUser.id,
+            name: existingUser.name,
+            email: existingUser.email,
+            image: existingUser.image,
+            emailVerified: existingUser.emailVerified,
+          };
+        }
+      }
+
+      // If user doesn't exist, create new one
+      return baseAdapter.createUser(userData);
+    },
+  };
+}
+
 declare module "next-auth" {
   interface Session extends DefaultSession {
     user: { id: string; role?: string } & DefaultSession["user"];
@@ -17,7 +48,7 @@ declare module "next-auth/jwt" {
 }
 
 export const authOptions: NextAuthOptions = {
-  adapter: PrismaAdapter(prisma),
+  adapter: CustomPrismaAdapter(prisma),
   providers: [
     CredentialsProvider({
       name: "Credentials",
@@ -120,6 +151,45 @@ export const authOptions: NextAuthOptions = {
   pages: { signIn: "/login", error: "/login" },
 
   callbacks: {
+    async signIn({ user, account, profile, email, credentials }) {
+      // Auto-link Google account to existing user with same email
+      if (account?.provider === "google" && user.email) {
+        const existingUser = await prisma.user.findUnique({
+          where: { email: user.email },
+        });
+
+        if (existingUser) {
+          // Check if account is already linked
+          const existingAccount = await prisma.account.findFirst({
+            where: {
+              userId: existingUser.id,
+              provider: "google",
+            },
+          });
+
+          // If not linked, link it
+          if (!existingAccount) {
+            await prisma.account.create({
+              data: {
+                userId: existingUser.id,
+                type: account.type,
+                provider: account.provider,
+                providerAccountId: account.providerAccountId,
+                refresh_token: account.refresh_token,
+                access_token: account.access_token,
+                expires_at: account.expires_at,
+                token_type: account.token_type,
+                scope: account.scope,
+                id_token: account.id_token,
+                session_state: account.session_state,
+              },
+            });
+          }
+        }
+      }
+      return true;
+    },
+
     async jwt({ token, user }) {
       if (user) {
         token.id = user.id;
