@@ -120,4 +120,4 @@ NexMart/
 
 ---
 
-**Built with ❤️ for a modern, scalable e-commerce future.**
+Crafted by Shafiq, designed for the modern e-commerce landscape
